@@ -7,6 +7,8 @@ from torch.autograd import Variable
 from torchvision.transforms import transforms
 import numpy as np
 import argparse
+import time
+import os
 
 try:
     from apex import amp
@@ -74,7 +76,7 @@ class Inference:
         self.model_path = model_path
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # self.classes = ("cat", "dog")
-        self.classes = read_class_names('./datasets/cub-200/attributes.txt')
+        self.classes = read_class_names(args.dataset_dir + '/cub-200/attributes.txt')
 
         self.config = model_config(self.config_path)
         self.model = build_model(self.config)
@@ -92,16 +94,38 @@ class Inference:
     def infer(self, img_path, meta_data_path):
         # _, _, meta = GenerateEmbedding(meta_data_path).generate()
         # meta = meta.to(self.device)
+        # NHWC
+        if args.channels_last:
+            self.model = self.model.to(memory_format=torch.channels_last)
+            print("---- Use NHWC model")
         meta = None
-        img = Image.open(img_path).convert('RGB')
-        img = self.transform_img(img)
-        img.unsqueeze_(0)
-        img = img.to(self.device)
-        img = Variable(img).to(self.device)
-        out = self.model(img, meta)
+        total_time = 0.0
+        total_sample = 0
+        for i in range(args.num_iter):
+            img = Image.open(img_path).convert('RGB')
+            img = self.transform_img(img)
+            img.unsqueeze_(0)
+            img = Variable(img)
+            if args.channels_last:
+                img = img.contiguous(memory_format=torch.channels_last)
+            elapsed = time.time()
+            img = img.to(self.device)
+            out = self.model(img, meta)
+            if torch.cuda.is_available(): torch.cuda.synchronize()
+            elapsed = time.time() - elapsed
 
+            if args.profile:
+                args.p.step()
+            print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
+            if i >= args.num_warmup:
+                total_time += elapsed
+                total_sample += 1
         _, pred = torch.max(out.data, 1)
         predict = self.classes[pred.data.item()]
+        throughput = total_sample / total_time
+        latency = total_time / total_sample * 1000
+        print('inference latency: %.3f ms' % latency)
+        print('inference Throughput: %f images/s' % throughput)
         # print(Fore.MAGENTA + f"The Prediction is: {predict}")
         return predict
 
@@ -110,17 +134,83 @@ def parse_option():
     parser = argparse.ArgumentParser('MetaFG Inference script', add_help=False)
     parser.add_argument('--cfg', type=str, default='./configs/MetaFG_0_224.yaml', metavar="FILE", help='path to config file', )
     # easy config modification
-    parser.add_argument('--model-path', default='metafg_0_1k_224.pth', type=str, help="path to model data")
-    parser.add_argument('--img-path', default='./datasets/cub-200/CUB_200_2011/images/012.Yellow_headed_Blackbird/Yellow_Headed_Blackbird_0003_8337.jpg', type=str, help='path to image')
+    parser.add_argument('--dataset_dir', type=str, default='datasets', help='datasets and models dir')
+    # parser.add_argument('--model-path', default='./datasets/models/metafg_0_1k_224.pth', type=str, help="path to model data")
+    # parser.add_argument('--img-path', default='./datasets/cub-200/CUB_200_2011/images/012.Yellow_headed_Blackbird/Yellow_Headed_Blackbird_0003_8337.jpg',
+    #           type=str, help='path to image')
     parser.add_argument('--meta-path', default='', type=str, help='path to meta data')
+    # for oob
+    # parser.add_argument('--device', type=str, default='cpu', help='device')
+    parser.add_argument('--precision', type=str, default='float32', help='precision')
+    parser.add_argument('--channels_last', type=int, default=1, help='use channels last format')
+    # parser.add_argument('--batch_size', type=int, default=1, help='batch_size')
+    parser.add_argument('--num_iter', type=int, default=-1, help='num_iter')
+    parser.add_argument('--num_warmup', type=int, default=-1, help='num_warmup')
+    parser.add_argument('--profile', dest='profile', action='store_true', help='profile')
+    parser.add_argument('--quantized_engine', type=str, default=None, help='quantized_engine')
+    parser.add_argument('--ipex', dest='ipex', action='store_true', help='ipex')
+    parser.add_argument('--jit', dest='jit', action='store_true', help='jit')
     args = parser.parse_args()
+    args.model_path = args.dataset_dir + '/models/metafg_0_1k_224.pth'
+    args.img_path = args.dataset_dir + '/cub-200/CUB_200_2011/images/012.Yellow_headed_Blackbird/Yellow_Headed_Blackbird_0003_8337.jpg'
     return args
 
 
 if __name__ == '__main__':
     args = parse_option()
-    result = Inference(config_path=args.cfg,
-                       model_path=args.model_path).infer(img_path=args.img_path, meta_data_path=args.meta_path)
+    if args.profile:
+        def trace_handler(p):
+            output = p.key_averages().table(sort_by="self_cpu_time_total")
+            print(output)
+            import pathlib
+            timeline_dir = str(pathlib.Path.cwd()) + '/timeline/'
+            if not os.path.exists(timeline_dir):
+                try:
+                    os.makedirs(timeline_dir)
+                except:
+                    pass
+            timeline_file = timeline_dir + 'timeline-' + str(torch.backends.quantized.engine) + '-' + \
+                        'MetaFormer-' + str(p.step_num) + '-' + str(os.getpid()) + '.json'
+            p.export_chrome_trace(timeline_file)
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+            record_shapes=True,
+            schedule=torch.profiler.schedule(
+                wait=int(args.num_iter/2),
+                warmup=2,
+                active=1,
+            ),
+            on_trace_ready=trace_handler,
+        ) as p:
+            args.p = p
+            if args.precision == "bfloat16":
+                print('---- Enable AMP bfloat16')
+                with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+                    result = Inference(config_path=args.cfg, model_path=args.model_path).infer(
+                        img_path=args.img_path, meta_data_path=args.meta_path)
+            elif args.precision == "float16":
+                print('---- Enable AMP float16')
+                with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+                    result = Inference(config_path=args.cfg, model_path=args.model_path).infer(
+                        img_path=args.img_path, meta_data_path=args.meta_path)
+            else:
+                result = Inference(config_path=args.cfg, model_path=args.model_path).infer(
+                        img_path=args.img_path, meta_data_path=args.meta_path)
+    else:
+        if args.precision == "bfloat16":
+            print('---- Enable AMP bfloat16')
+            with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+                result = Inference(config_path=args.cfg, model_path=args.model_path).infer(
+                    img_path=args.img_path, meta_data_path=args.meta_path)
+        elif args.precision == "float16":
+            print('---- Enable AMP float16')
+            with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+                result = Inference(config_path=args.cfg, model_path=args.model_path).infer(
+                    img_path=args.img_path, meta_data_path=args.meta_path)
+        else:
+            result = Inference(config_path=args.cfg, model_path=args.model_path).infer(
+                    img_path=args.img_path, meta_data_path=args.meta_path)
+
     print("Predicted: ", result)
 
 # Usage: python inference.py --cfg 'path/to/cfg' --model_path 'path/to/model' --img-path 'path/to/img' --meta-path 'path/to/meta'
