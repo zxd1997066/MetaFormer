@@ -74,14 +74,14 @@ class Inference:
         self.model_path = model_path
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # self.classes = ("cat", "dog")
-        self.classes = read_class_names(r"D:\dataset\CUB_200_2011\CUB_200_2011\classes_custom.txt")
+        self.classes = read_class_names('./datasets/cub-200/attributes.txt')
 
         self.config = model_config(self.config_path)
         self.model = build_model(self.config)
         self.checkpoint = torch.load(self.model_path, map_location='cpu')
-        self.model.load_state_dict(self.checkpoint['model'], strict=False)
+        self.model.load_state_dict(self.checkpoint, strict=False)
         self.model.eval()
-        self.model.cuda()
+        self.model.to(self.device)
 
         self.transform_img = transforms.Compose([
             transforms.Resize((224, 224), interpolation=Image.BILINEAR),
@@ -90,12 +90,13 @@ class Inference:
         ])
 
     def infer(self, img_path, meta_data_path):
-        _, _, meta = GenerateEmbedding(meta_data_path).generate()
-        meta = meta.cuda()
+        # _, _, meta = GenerateEmbedding(meta_data_path).generate()
+        # meta = meta.to(self.device)
+        meta = None
         img = Image.open(img_path).convert('RGB')
         img = self.transform_img(img)
         img.unsqueeze_(0)
-        img = img.cuda()
+        img = img.to(self.device)
         img = Variable(img).to(self.device)
         out = self.model(img, meta)
 
@@ -107,11 +108,11 @@ class Inference:
 
 def parse_option():
     parser = argparse.ArgumentParser('MetaFG Inference script', add_help=False)
-    parser.add_argument('--cfg', type=str, default='D:/pycharmprojects/MetaFormer/configs/MetaFG_meta_bert_1_224.yaml', metavar="FILE", help='path to config file', )
+    parser.add_argument('--cfg', type=str, default='./configs/MetaFG_0_224.yaml', metavar="FILE", help='path to config file', )
     # easy config modification
-    parser.add_argument('--model-path', default='D:\pycharmprojects\MetaFormer\output\MetaFG_meta_1\cub_200\ckpt_epoch_92.pth', type=str, help="path to model data")
-    parser.add_argument('--img-path', default=r"D:\dataset\CUB_200_2011\CUB_200_2011\images\012.Yellow_headed_Blackbird\Yellow_Headed_Blackbird_0003_8337.jpg", type=str, help='path to image')
-    parser.add_argument('--meta-path', default=r"D:\dataset\CUB_200_2011\text_c10\012.Yellow_headed_Blackbird\Yellow_Headed_Blackbird_0003_8337.txt", type=str, help='path to meta data')
+    parser.add_argument('--model-path', default='metafg_0_1k_224.pth', type=str, help="path to model data")
+    parser.add_argument('--img-path', default='./datasets/cub-200/CUB_200_2011/images/012.Yellow_headed_Blackbird/Yellow_Headed_Blackbird_0003_8337.jpg', type=str, help='path to image')
+    parser.add_argument('--meta-path', default='', type=str, help='path to meta data')
     args = parser.parse_args()
     return args
 
