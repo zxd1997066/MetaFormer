@@ -17,9 +17,10 @@ function main {
         exit 1
         set -x
     fi
-    pip install -U timm==0.4.5 transformers==4.18.0 \
+    pip install -U transformers==4.18.0 \
                    yacs==0.1.8 opencv-python==4.5.1.48
-
+    
+    pip install -U timm==0.4.5 --no-deps 
     # if multiple use 'xxx,xxx,xxx'
     model_name_list=($(echo "${model_name}" |sed 's/,/ /g'))
     batch_size_list=($(echo "${batch_size}" |sed 's/,/ /g'))
