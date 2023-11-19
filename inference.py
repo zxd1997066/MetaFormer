@@ -101,6 +101,8 @@ class Inference:
         meta = None
         total_time = 0.0
         total_sample = 0
+        if args.compile:
+            self.model = torch.compile(self.model, backend=args.backend, options={"freezing": True})
         for i in range(args.num_iter):
             img = Image.open(img_path).convert('RGB')
             img = self.transform_img(img)
@@ -150,6 +152,10 @@ def parse_option():
     parser.add_argument('--quantized_engine', type=str, default=None, help='quantized_engine')
     parser.add_argument('--ipex', dest='ipex', action='store_true', help='ipex')
     parser.add_argument('--jit', dest='jit', action='store_true', help='jit')
+    parser.add_argument("--compile", action='store_true', default=False,
+                    help="enable torch.compile")
+    parser.add_argument("--backend", type=str, default='inductor',
+                    help="enable torch.compile backend")
     args = parser.parse_args()
     args.model_path = args.dataset_dir + '/models/metafg_0_1k_224.pth'
     args.img_path = args.dataset_dir + '/cub-200/CUB_200_2011/images/012.Yellow_headed_Blackbird/Yellow_Headed_Blackbird_0003_8337.jpg'
