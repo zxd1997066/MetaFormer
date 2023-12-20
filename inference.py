@@ -9,10 +9,10 @@ import numpy as np
 import argparse
 import time
 import os
-from torch._inductor import config
-import torch._inductor
-torch._inductor.config.profiler_mark_wrapper_call = True
-torch._inductor.config.cpp.enable_kernel_profile = True
+# from torch._inductor import config
+# import torch._inductor
+# torch._inductor.config.profiler_mark_wrapper_call = True
+# torch._inductor.config.cpp.enable_kernel_profile = True
 
 try:
     from apex import amp
