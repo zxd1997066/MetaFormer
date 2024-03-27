@@ -10,7 +10,7 @@ import argparse
 import time
 import os
 # from torch._inductor import config
-# import torch._inductor
+import torch._inductor
 # torch._inductor.config.profiler_mark_wrapper_call = True
 # torch._inductor.config.cpp.enable_kernel_profile = True
 
@@ -169,6 +169,8 @@ def parse_option():
 if __name__ == '__main__':
     args = parse_option()
     if args.profile:
+        torch._inductor.config.profiler_mark_wrapper_call = True
+        torch._inductor.config.cpp.enable_kernel_profile = True
         def trace_handler(p):
             output = p.key_averages().table(sort_by="self_cpu_time_total")
             print(output)
