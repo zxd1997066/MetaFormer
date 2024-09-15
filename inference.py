@@ -160,6 +160,8 @@ def parse_option():
                     help="enable torch.compile")
     parser.add_argument("--backend", type=str, default='inductor',
                     help="enable torch.compile backend")
+    parser.add_argument("--triton_cpu", action='store_true', default=False,
+                    help="enable triton_cpu")
     args = parser.parse_args()
     args.model_path = args.dataset_dir + '/models/metafg_0_1k_224.pth'
     args.img_path = args.dataset_dir + '/cub-200/CUB_200_2011/images/012.Yellow_headed_Blackbird/Yellow_Headed_Blackbird_0003_8337.jpg'
@@ -168,6 +170,10 @@ def parse_option():
 
 if __name__ == '__main__':
     args = parse_option()
+    if args.triton_cpu:
+        print("run with triton cpu backend")
+        import torch._inductor.config
+        torch._inductor.config.cpu_backend="triton"
     if args.profile:
         torch._inductor.config.profiler_mark_wrapper_call = True
         torch._inductor.config.cpp.enable_kernel_profile = True
